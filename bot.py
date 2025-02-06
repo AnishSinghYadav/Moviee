@@ -1,65 +1,110 @@
 import os
 import openai
 import requests
+import logging
+import telegram
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
-# Load environment variables
+# Load API keys from .env
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# Set OpenAI API key
-openai.api_key = OPENAI_API_KEY  # ✅ Correct way for openai<=0.28
+# Initialize logging
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-async def start(update: Update, context: CallbackContext):
-    """Send a welcome message when the bot starts"""
-    await update.message.reply_text("🎬 Welcome to the Movie Bot! Send me a movie name to get recommendations.")
+# Initialize OpenAI
+openai.api_key = OPENAI_API_KEY
 
-async def get_movie_recommendation(update: Update, context: CallbackContext):
-    """Fetch movie recommendations from OpenAI and show posters from OMDB"""
-    user_message = update.message.text.strip()
+# Fetch movie details from OMDB API
+def fetch_movie_details(movie_name):
+    url = f"http://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}"
+    response = requests.get(url)
+    data = response.json()
+    
+    if data["Response"] == "False":
+        return None
+    
+    return {
+        "title": data.get("Title", "N/A"),
+        "year": data.get("Year", "N/A"),
+        "imdb_rating": data.get("imdbRating", "N/A"),
+        "genre": data.get("Genre", "N/A"),
+        "plot": data.get("Plot", "N/A"),
+        "poster": data.get("Poster", ""),
+    }
 
-    # Step 1: Get movie recommendation from OpenAI
-    prompt = f"Recommend a movie similar to {user_message} and provide its name, description, rating, release date, and top 3 cast members."
+# Fetch YouTube trailer link
+def fetch_youtube_trailer(movie_name):
+    query = f"{movie_name} Official Trailer"
+    url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={query}&type=video&key={YOUTUBE_API_KEY}"
+    
+    response = requests.get(url)
+    data = response.json()
+    
+    if "items" in data and len(data["items"]) > 0:
+        video_id = data["items"][0]["id"]["videoId"]
+        return f"https://www.youtube.com/watch?v={video_id}"
+    
+    return "Trailer not found."
+
+# Fetch similar movie recommendations from OpenAI
+def fetch_movie_recommendations(movie_name):
+    prompt = f"Suggest 3 to 5 movies similar to '{movie_name}' and include their short description and IMDb rating."
+    
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    return response["choices"][0]["message"]["content"].strip()
+
+# Handle user messages
+def handle_message(update: Update, context: CallbackContext):
+    movie_name = update.message.text
+    chat_id = update.message.chat_id
     
     try:
-        response = openai.ChatCompletion.create(  # ✅ Correct for openai==0.28
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        movie_data = response["choices"][0]["message"]["content"]
-
-        # Step 2: Extract movie name for OMDB API
-        movie_lines = movie_data.split("\n")
-        movie_name = movie_lines[0].split(":")[-1].strip()  # Extract the first line as the movie name
+        # Fetch movie details
+        movie_details = fetch_movie_details(movie_name)
+        if not movie_details:
+            update.message.reply_text("Movie not found! Please try another.")
+            return
         
-        # Step 3: Fetch movie poster from OMDB API
-        omdb_url = f"http://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}"
-        omdb_response = requests.get(omdb_url).json()
-        poster_url = omdb_response.get("Poster", "No poster available")
+        # Fetch YouTube trailer
+        trailer_link = fetch_youtube_trailer(movie_name)
 
-        # Step 4: Send response to Telegram
-        reply_text = f"🎬 *Movie Recommendation:*\n{movie_data}"
-        await update.message.reply_photo(photo=poster_url, caption=reply_text, parse_mode="Markdown")
+        # Fetch similar movies
+        similar_movies = fetch_movie_recommendations(movie_name)
 
+        # Send movie details
+        message = f"🎬 *{movie_details['title']}* ({movie_details['year']})\n"
+        message += f"⭐ IMDb: {movie_details['imdb_rating']}\n"
+        message += f"🎭 Genre: {movie_details['genre']}\n"
+        message += f"📖 Plot: {movie_details['plot']}\n\n"
+        message += f"🎥 [Watch Trailer]({trailer_link})\n\n"
+        message += f"🎭 *Similar Movies:*\n{similar_movies}"
+
+        context.bot.send_photo(chat_id, photo=movie_details["poster"])
+        context.bot.send_message(chat_id, text=message, parse_mode=telegram.ParseMode.MARKDOWN)
+    
     except Exception as e:
-        await update.message.reply_text(f"⚠️ Error fetching recommendation: {str(e)}")
+        logging.error(f"Error fetching recommendation: {str(e)}")
+        update.message.reply_text("⚠️ Error fetching recommendation! Please try again.")
 
-async def error_handler(update: Update, context: CallbackContext):
-    """Handle errors"""
-    print(f"Error: {context.error}")
+# Start bot
+def main():
+    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-# Initialize bot application
-app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+    
+    updater.start_polling()
+    updater.idle()
 
-# Add handlers
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_movie_recommendation))
-app.add_error_handler(error_handler)
-
-# Start the bot
-print("🤖 Bot is running...")
-app.run_polling()
+if __name__ == "__main__":
+    main()
