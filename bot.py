@@ -12,7 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 
 # Set OpenAI API key
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY  # ✅ Correct way for openai<=0.28
 
 async def start(update: Update, context: CallbackContext):
     """Send a welcome message when the bot starts"""
@@ -26,11 +26,11 @@ async def get_movie_recommendation(update: Update, context: CallbackContext):
     prompt = f"Recommend a movie similar to {user_message} and provide its name, description, rating, release date, and top 3 cast members."
     
     try:
-        response = client.chat.completions.create(
+        response = openai.ChatCompletion.create(  # ✅ Correct for openai==0.28
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
         )
-        movie_data = response.choices[0].message.content
+        movie_data = response["choices"][0]["message"]["content"]
 
         # Step 2: Extract movie name for OMDB API
         movie_lines = movie_data.split("\n")
