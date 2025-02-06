@@ -12,7 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 
 # Set OpenAI API key
-openai.api_key = OPENAI_API_KEY  # ✅ Correct way for openai<=0.28
+openai.api_key = OPENAI_API_KEY  # ✅ Correct for openai<=0.28
 
 async def start(update: Update, context: CallbackContext):
     """Send a welcome message when the bot starts"""
@@ -20,10 +20,16 @@ async def start(update: Update, context: CallbackContext):
 
 async def get_movie_recommendation(update: Update, context: CallbackContext):
     """Fetch movie recommendations from OpenAI and show posters from OMDB"""
-    user_message = update.message.text.strip()
+    user_movie = update.message.text.strip()
 
-    # Step 1: Get movie recommendation from OpenAI
-    prompt = f"Recommend a movie similar to {user_message} and provide its name, description, rating, release date, and top 3 cast members."
+    # Step 1: Inform the user that recommendations are being fetched
+    await update.message.reply_text(f"🔍 Searching for movies similar to *{user_movie}*...", parse_mode="Markdown")
+
+    # Step 2: Get movie recommendations from OpenAI
+    prompt = (
+        f"Recommend five movies similar to '{user_movie}'. "
+        "For each movie, provide its name, description, rating, release year, and top 3 cast members."
+    )
     
     try:
         response = openai.ChatCompletion.create(  # ✅ Correct for openai==0.28
@@ -31,19 +37,36 @@ async def get_movie_recommendation(update: Update, context: CallbackContext):
             messages=[{"role": "user", "content": prompt}]
         )
         movie_data = response["choices"][0]["message"]["content"]
-
-        # Step 2: Extract movie name for OMDB API
         movie_lines = movie_data.split("\n")
-        movie_name = movie_lines[0].split(":")[-1].strip()  # Extract the first line as the movie name
-        
-        # Step 3: Fetch movie poster from OMDB API
-        omdb_url = f"http://www.omdbapi.com/?t={movie_name}&apikey={OMDB_API_KEY}"
-        omdb_response = requests.get(omdb_url).json()
-        poster_url = omdb_response.get("Poster", "No poster available")
 
-        # Step 4: Send response to Telegram
-        reply_text = f"🎬 *Movie Recommendation:*\n{movie_data}"
-        await update.message.reply_photo(photo=poster_url, caption=reply_text, parse_mode="Markdown")
+        # Step 3: Extract five movie names
+        recommended_movies = []
+        for line in movie_lines:
+            if line.strip().startswith("1.") or line.strip().startswith("2.") or \
+               line.strip().startswith("3.") or line.strip().startswith("4.") or \
+               line.strip().startswith("5."):
+                recommended_movies.append(line.split(".")[-1].strip())
+
+        # Step 4: Fetch posters from OMDB API
+        posters = {}
+        for movie in recommended_movies:
+            omdb_url = f"http://www.omdbapi.com/?t={movie}&apikey={OMDB_API_KEY}"
+            omdb_response = requests.get(omdb_url).json()
+            posters[movie] = omdb_response.get("Poster", None)  # None if poster not found
+
+        # Step 5: Send response to Telegram
+        reply_text = f"🎬 *You searched for:* {user_movie}\n\n"
+        reply_text += "Here are 5 similar movies:\n\n"
+
+        for i, movie in enumerate(recommended_movies, start=1):
+            reply_text += f"🎥 *{i}. {movie}*\n"
+
+        await update.message.reply_text(reply_text, parse_mode="Markdown")
+
+        # Send movie posters one by one
+        for movie, poster in posters.items():
+            if poster:
+                await update.message.reply_photo(photo=poster, caption=f"🎬 *{movie}*", parse_mode="Markdown")
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error fetching recommendation: {str(e)}")
