@@ -5,7 +5,7 @@ import logging
 import telegram
 from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
 
 # Load API keys from .env
 load_dotenv()
@@ -64,7 +64,7 @@ def fetch_movie_recommendations(movie_name):
     return response["choices"][0]["message"]["content"].strip()
 
 # Handle user messages
-def handle_message(update: Update, context: CallbackContext):
+async def handle_message(update: Update, context: CallbackContext):
     movie_name = update.message.text
     chat_id = update.message.chat_id
     
@@ -72,7 +72,7 @@ def handle_message(update: Update, context: CallbackContext):
         # Fetch movie details
         movie_details = fetch_movie_details(movie_name)
         if not movie_details:
-            update.message.reply_text("Movie not found! Please try another.")
+            await update.message.reply_text("Movie not found! Please try another.")
             return
         
         # Fetch YouTube trailer
@@ -89,22 +89,21 @@ def handle_message(update: Update, context: CallbackContext):
         message += f"🎥 [Watch Trailer]({trailer_link})\n\n"
         message += f"🎭 *Similar Movies:*\n{similar_movies}"
 
-        context.bot.send_photo(chat_id, photo=movie_details["poster"])
-        context.bot.send_message(chat_id, text=message, parse_mode=telegram.ParseMode.MARKDOWN)
+        await context.bot.send_photo(chat_id, photo=movie_details["poster"])
+        await context.bot.send_message(chat_id, text=message, parse_mode=telegram.constants.ParseMode.MARKDOWN)
     
     except Exception as e:
         logging.error(f"Error fetching recommendation: {str(e)}")
-        update.message.reply_text("⚠️ Error fetching recommendation! Please try again.")
+        await update.message.reply_text("⚠️ Error fetching recommendation! Please try again.")
 
 # Start bot
 def main():
-    updater = Updater(TELEGRAM_BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-    
-    updater.start_polling()
-    updater.idle()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logging.info("Bot started successfully...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
