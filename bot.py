@@ -1,6 +1,7 @@
 import os
 import openai
 import requests
+import re
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext
@@ -11,66 +12,73 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OMDB_API_KEY = os.getenv("OMDB_API_KEY")
 
-# Set OpenAI API key
-openai.api_key = OPENAI_API_KEY  # ✅ Correct for openai<=0.28
+# Set OpenAI API Key
+openai.api_key = OPENAI_API_KEY
 
 async def start(update: Update, context: CallbackContext):
-    """Send a welcome message when the bot starts"""
+    """Start the bot with a welcome message."""
     await update.message.reply_text("🎬 Welcome to the Movie Bot! Send me a movie name to get recommendations.")
 
 async def get_movie_recommendation(update: Update, context: CallbackContext):
-    """Fetch movie recommendations from OpenAI and show posters from OMDB"""
+    """Fetch movie recommendations from OpenAI and show posters from OMDB."""
     user_movie = update.message.text.strip()
 
-    # Step 1: Inform the user that recommendations are being fetched
     await update.message.reply_text(f"🔍 Searching for movies similar to *{user_movie}*...", parse_mode="Markdown")
 
-    # Step 2: Get movie recommendations from OpenAI
+    # Step 1: Get movie recommendations from OpenAI
     prompt = (
         f"Recommend five movies similar to '{user_movie}'. "
-        "For each movie, provide the following details in this exact format:\n\n"
-        "Movie Name: <name>\n"
-        "Description: <brief description>\n"
-        "Rating: <rating out of 10>\n"
-        "Release Year: <year>\n"
-        "Top 3 Cast Members: <actor 1>, <actor 2>, <actor 3>\n\n"
+        "For each movie, provide details in this exact format:\n\n"
+        "**Movie Name:** <movie name>\n"
+        "**Description:** <brief description>\n"
+        "**Rating:** <rating out of 10>\n"
+        "**Release Year:** <year>\n"
+        "**Top 3 Cast Members:** <actor 1>, <actor 2>, <actor 3>\n\n"
+        "Make sure each movie entry follows this format exactly."
     )
 
     try:
-        response = openai.ChatCompletion.create(  # ✅ Correct for openai==0.28
+        response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
         )
         movie_data = response["choices"][0]["message"]["content"]
 
-        # Step 3: Split the response into different movies
-        movie_entries = movie_data.strip().split("\n\n")  # Each movie block is separated by a double newline
-        movies = []
+        # Step 2: Extract structured movie details using regex
+        movie_pattern = re.compile(
+            r"\*\*Movie Name:\*\* (.*?)\n"
+            r"\*\*Description:\*\* (.*?)\n"
+            r"\*\*Rating:\*\* (.*?)\n"
+            r"\*\*Release Year:\*\* (.*?)\n"
+            r"\*\*Top 3 Cast Members:\*\* (.*?)\n",
+            re.DOTALL
+        )
+        
+        movies = movie_pattern.findall(movie_data)
+        movie_list = []
 
-        for entry in movie_entries:
-            lines = entry.split("\n")
-            if len(lines) >= 5:
-                movie_info = {
-                    "name": lines[0].split(":")[1].strip(),
-                    "description": lines[1].split(":")[1].strip(),
-                    "rating": lines[2].split(":")[1].strip(),
-                    "year": lines[3].split(":")[1].strip(),
-                    "cast": lines[4].split(":")[1].strip()
-                }
-                movies.append(movie_info)
-
-        # Step 4: Fetch posters from OMDB API
-        posters = {}
         for movie in movies:
+            movie_info = {
+                "name": movie[0].strip(),
+                "description": movie[1].strip(),
+                "rating": movie[2].strip(),
+                "year": movie[3].strip(),
+                "cast": movie[4].strip()
+            }
+            movie_list.append(movie_info)
+
+        # Step 3: Fetch posters from OMDB API
+        posters = {}
+        for movie in movie_list:
             omdb_url = f"http://www.omdbapi.com/?t={movie['name']}&apikey={OMDB_API_KEY}"
             omdb_response = requests.get(omdb_url).json()
             posters[movie['name']] = omdb_response.get("Poster", None)  # None if poster not found
 
-        # Step 5: Send response to Telegram
+        # Step 4: Send text details first
         reply_text = f"🎬 *You searched for:* {user_movie}\n\n"
         reply_text += "Here are 5 similar movies:\n\n"
 
-        for movie in movies:
+        for movie in movie_list:
             reply_text += (
                 f"🎥 *{movie['name']}*\n"
                 f"📖 *Description:* {movie['description']}\n"
@@ -81,8 +89,8 @@ async def get_movie_recommendation(update: Update, context: CallbackContext):
 
         await update.message.reply_text(reply_text, parse_mode="Markdown")
 
-        # Step 6: Send posters one by one
-        for movie in movies:
+        # Step 5: Send posters one by one
+        for movie in movie_list:
             poster_url = posters.get(movie['name'])
             if poster_url:
                 await update.message.reply_photo(photo=poster_url, caption=f"🎬 *{movie['name']}*", parse_mode="Markdown")
@@ -91,7 +99,7 @@ async def get_movie_recommendation(update: Update, context: CallbackContext):
         await update.message.reply_text(f"⚠️ Error fetching recommendation: {str(e)}")
 
 async def error_handler(update: Update, context: CallbackContext):
-    """Handle errors"""
+    """Handle errors."""
     print(f"Error: {context.error}")
 
 # Initialize bot application
