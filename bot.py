@@ -28,45 +28,64 @@ async def get_movie_recommendation(update: Update, context: CallbackContext):
     # Step 2: Get movie recommendations from OpenAI
     prompt = (
         f"Recommend five movies similar to '{user_movie}'. "
-        "For each movie, provide its name, description, rating, release year, and top 3 cast members."
+        "For each movie, provide the following details in this exact format:\n\n"
+        "Movie Name: <name>\n"
+        "Description: <brief description>\n"
+        "Rating: <rating out of 10>\n"
+        "Release Year: <year>\n"
+        "Top 3 Cast Members: <actor 1>, <actor 2>, <actor 3>\n\n"
     )
-    
+
     try:
         response = openai.ChatCompletion.create(  # ✅ Correct for openai==0.28
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}]
         )
         movie_data = response["choices"][0]["message"]["content"]
-        movie_lines = movie_data.split("\n")
 
-        # Step 3: Extract five movie names
-        recommended_movies = []
-        for line in movie_lines:
-            if line.strip().startswith("1.") or line.strip().startswith("2.") or \
-               line.strip().startswith("3.") or line.strip().startswith("4.") or \
-               line.strip().startswith("5."):
-                recommended_movies.append(line.split(".")[-1].strip())
+        # Step 3: Split the response into different movies
+        movie_entries = movie_data.strip().split("\n\n")  # Each movie block is separated by a double newline
+        movies = []
+
+        for entry in movie_entries:
+            lines = entry.split("\n")
+            if len(lines) >= 5:
+                movie_info = {
+                    "name": lines[0].split(":")[1].strip(),
+                    "description": lines[1].split(":")[1].strip(),
+                    "rating": lines[2].split(":")[1].strip(),
+                    "year": lines[3].split(":")[1].strip(),
+                    "cast": lines[4].split(":")[1].strip()
+                }
+                movies.append(movie_info)
 
         # Step 4: Fetch posters from OMDB API
         posters = {}
-        for movie in recommended_movies:
-            omdb_url = f"http://www.omdbapi.com/?t={movie}&apikey={OMDB_API_KEY}"
+        for movie in movies:
+            omdb_url = f"http://www.omdbapi.com/?t={movie['name']}&apikey={OMDB_API_KEY}"
             omdb_response = requests.get(omdb_url).json()
-            posters[movie] = omdb_response.get("Poster", None)  # None if poster not found
+            posters[movie['name']] = omdb_response.get("Poster", None)  # None if poster not found
 
         # Step 5: Send response to Telegram
         reply_text = f"🎬 *You searched for:* {user_movie}\n\n"
         reply_text += "Here are 5 similar movies:\n\n"
 
-        for i, movie in enumerate(recommended_movies, start=1):
-            reply_text += f"🎥 *{i}. {movie}*\n"
+        for movie in movies:
+            reply_text += (
+                f"🎥 *{movie['name']}*\n"
+                f"📖 *Description:* {movie['description']}\n"
+                f"⭐ *Rating:* {movie['rating']}/10\n"
+                f"📅 *Release Year:* {movie['year']}\n"
+                f"🎭 *Top Cast:* {movie['cast']}\n\n"
+            )
 
         await update.message.reply_text(reply_text, parse_mode="Markdown")
 
-        # Send movie posters one by one
-        for movie, poster in posters.items():
-            if poster:
-                await update.message.reply_photo(photo=poster, caption=f"🎬 *{movie}*", parse_mode="Markdown")
+        # Step 6: Send posters one by one
+        for movie in movies:
+            poster_url = posters.get(movie['name'])
+            if poster_url:
+                await update.message.reply_photo(photo=poster_url, caption=f"🎬 *{movie['name']}*", parse_mode="Markdown")
 
     except Exception as e:
         await update.message.reply_text(f"⚠️ Error fetching recommendation: {str(e)}")
